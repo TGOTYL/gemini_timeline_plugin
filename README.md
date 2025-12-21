@@ -1,6 +1,6 @@
 # 🚀 Gemini Smart Navigator
 
-**[简体中文](https://github.com/TGOTYL/gemini_timeline_plugin/blob/main/README_CN.md))** | **English**
+**[简体中文](https://github.com/TGOTYL/gemini_timeline_plugin/blob/main/README_CN.md)** | **English**
 
 **Gemini Smart Navigator** is an advanced UX enhancement script for Google Gemini (gemini.google.com). It generates a dynamic "mini-map" sidebar that allows you to navigate long conversations effortlessly and provides AI-powered summaries of your queries.
 
