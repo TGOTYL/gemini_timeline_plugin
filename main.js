@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Gemini 智能导航 - 11.0 完美终极版
+// @name        Gemini 智能导航 - 12.1 稳定摘要版
 // @namespace    http://tampermonkey.net/
-// @version      11.0
-// @description  优化跳转位置至顶部，移除悬停闪烁动画，极致稳定体验
+// @version      12.1
+// @description  优化跳转位置至顶部，移除悬停闪烁动画，极致稳定体验，自动后台总结，精准定位回答，低温度控制
 // @author       Gemini Thought Partner
 // @match        https://gemini.google.com/app/*
 // @grant        GM_xmlhttpRequest
@@ -44,7 +44,6 @@
         .nav-item.model { height: 10px; width: 10px; background-color: #9aa0a6; opacity: 0.5; }
         .nav-item.not-in-dom { opacity: 0.2; outline: 1px dashed rgba(255,255,255,0.4); }
 
-        /* 移除 Scale 缩放，改用单纯的亮度提升，防止闪烁 */
         .nav-item:hover { filter: brightness(1.6); opacity: 1; }
 
         #gemini-nav-tooltip {
@@ -83,6 +82,12 @@
         const userQueries = Array.from(document.querySelectorAll('user-query'));
         if (userQueries.length === 0) return;
 
+        let structureChanged = false;
+
+        if (chatPairs.length !== userQueries.length) {
+            structureChanged = true;
+        }
+
         userQueries.forEach((uq, index) => {
             const text = uq.innerText.trim();
             if (text.length < 1) return;
@@ -102,55 +107,86 @@
                     chatPairs[index].id = currentHash;
                     chatPairs[index].text = text;
                     chatPairs[index].summary = null;
+                    chatPairs[index].isLoading = false;
+                    structureChanged = true;
                 }
-                chatPairs[index].hasModel = hasModel;
+                if (chatPairs[index].hasModel !== hasModel) {
+                    chatPairs[index].hasModel = hasModel;
+                    structureChanged = true;
+                }
             } else {
-                chatPairs.push({ id: currentHash, text: text, summary: null, hasModel: hasModel });
+                chatPairs.push({ id: currentHash, text: text, summary: null, hasModel: hasModel, isLoading: false });
+                structureChanged = true;
+            }
+
+            const pair = chatPairs[index];
+            if (!pair.summary && !pair.isLoading && pair.text) {
+                pair.isLoading = true;
+                fetchSummary(pair);
             }
         });
 
         if (chatPairs.length > userQueries.length) {
             chatPairs = chatPairs.slice(0, userQueries.length);
+            structureChanged = true;
         }
 
-        renderSidebar();
+        if (structureChanged) {
+            renderSidebar();
+        }
     }
 
     // --- 摘要 AI ---
-    async function fetchSummary(text) {
-        if (!API_TOKEN) return text.substring(0, 20);
-        return new Promise((resolve) => {
-            const task = () => {
-                activeRequests++;
-                GM_xmlhttpRequest({
-                    method: "POST",
-                    url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_TOKEN}` },
-                    data: JSON.stringify({
-                        model: "GLM-4-Flash",
-                        messages: [
-                            {
-                                role: "system",
-                                content: "你是一个对话索引助手。请总结提问。要求：1.长度在50字之间；2.提取核心实体、主题或独特名词，保证总结的精炼巧妙；3.禁止回答问题；4.直接输出结果。"
-                            },
-                            { role: "user", content: `请总结：${text}` }
-                        ],
-                        stream: false
-                    }),
-                    onload: (res) => {
-                        activeRequests--;
-                        try {
-                            const data = JSON.parse(res.responseText);
-                            resolve(data.choices[0].message.content.trim().replace(/[#*]/g, '').substring(0, 35));
-                        } catch (e) { resolve(text.substring(0, 20)); }
-                        processQueue();
-                    },
-                    onerror: () => { activeRequests--; resolve(text.substring(0, 20)); processQueue(); }
-                });
-            };
-            requestQueue.push(task);
-            processQueue();
-        });
+    async function fetchSummary(pair) {
+        const text = pair.text;
+        if (!API_TOKEN) {
+            pair.summary = text.substring(0, 20);
+            pair.isLoading = false;
+            return;
+        }
+
+        const updatePair = (result) => {
+            pair.summary = result;
+            pair.isLoading = false;
+            if (tooltip.style.display === 'block' && tooltip.getAttribute('data-active-id') === pair.id) {
+                tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br>${result}`;
+            }
+        };
+
+        const task = () => {
+            activeRequests++;
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_TOKEN}` },
+                data: JSON.stringify({
+                    model: "GLM-4-Flash",
+                    // 🔥 核心修改：加入温度控制，强制结果一致性
+                    temperature: 0.1,
+                    top_p: 0.1,
+                    messages: [
+                        {
+                            role: "system",
+                            content: "你是一个侧边栏导航命名专家。请将用户的输入提取为极其精炼的标题。要求：1. **必须严格控制在 12 个字以内**。2. 去掉“请问”、“怎么”、“如何”等无意义修饰词。3. 格式示例：“Python 去除空格的写法”、“InputERROR 报错修复”。4. 直接输出结果。"
+                        },
+                        { role: "user", content: `请总结：${text}` }
+                    ],
+                    stream: false
+                }),
+                onload: (res) => {
+                    activeRequests--;
+                    try {
+                        const data = JSON.parse(res.responseText);
+                        const summary = data.choices[0].message.content.trim().replace(/[#*]/g, '').substring(0, 35);
+                        updatePair(summary);
+                    } catch (e) { updatePair(text.substring(0, 20)); }
+                    processQueue();
+                },
+                onerror: () => { activeRequests--; updatePair(text.substring(0, 20)); processQueue(); }
+            });
+        };
+        requestQueue.push(task);
+        processQueue();
     }
 
     function processQueue() {
@@ -159,14 +195,36 @@
         }
     }
 
-    // --- 改进的跳转逻辑：对齐顶部 ---
-    async function smartJump(targetHash) {
-        const findTarget = () => Array.from(document.querySelectorAll('user-query'))
-                                     .find(el => getHash(el.innerText) === targetHash);
+    // --- 改进的跳转逻辑：支持跳转到回答 (isModel 参数) ---
+    async function smartJump(targetHash, isModel = false) {
+        // 查找目标函数
+        const findTarget = () => {
+            // 1. 先找到 user-query
+            const uq = Array.from(document.querySelectorAll('user-query'))
+                             .find(el => getHash(el.innerText) === targetHash);
+
+            if (!uq) return null;
+            if (!isModel) return uq; // 如果只要找提问，直接返回
+
+            // 2. 如果要找回答，基于 uq 向下寻找 model-response
+            let current = uq;
+            for(let i=0; i<5; i++) {
+                if (current && current.nextElementSibling) {
+                    const sibling = current.nextElementSibling;
+                    // 兼容不同版本的 DOM 结构
+                    if (sibling.tagName === 'MODEL-RESPONSE' || sibling.querySelector('model-response')) {
+                        return sibling;
+                    }
+                }
+                current = current.parentElement;
+            }
+            // 如果没找到回答（可能还没生成），则回退到跳转提问
+            return uq;
+        };
+
         let target = findTarget();
 
         const performScroll = (el) => {
-            // 对齐到 start (顶部)
             el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         };
 
@@ -175,14 +233,15 @@
             return;
         }
 
-        // 回溯加载历史
         const scroller = document.querySelector('.ms-infinite-scroller') || window;
         let attempts = 0;
         const timer = setInterval(() => {
             if (scroller === window) window.scrollBy(0, -1200);
             else scroller.scrollTop -= 1200;
-            target = findTarget();
+
+            target = findTarget(); // 重新查找
             attempts++;
+
             if (target || attempts > 20 || (scroller !== window && scroller.scrollTop === 0)) {
                 clearInterval(timer);
                 if (target) performScroll(target);
@@ -190,7 +249,7 @@
         }, 400);
     }
 
-    // --- 渲染 (静默 hover 逻辑) ---
+    // --- 渲染 ---
     function renderSidebar() {
         sidebar.innerHTML = '';
         const currentDomHashes = Array.from(document.querySelectorAll('user-query')).map(el => getHash(el.innerText));
@@ -200,31 +259,39 @@
             row.className = 'nav-row';
             const isVisible = currentDomHashes.includes(pair.id);
 
-            // 用户块
+            // 用户块 (false: 跳提问)
             const uItem = document.createElement('div');
             uItem.className = `nav-item user ${!isVisible ? 'not-in-dom' : ''}`;
-            uItem.onclick = () => smartJump(pair.id);
-            uItem.onmouseenter = async (e) => {
+            uItem.onclick = () => smartJump(pair.id, false);
+            uItem.onmouseenter = (e) => {
                 tooltip.style.display = 'block';
+                tooltip.setAttribute('data-active-id', pair.id);
                 tooltip.style.top = `${Math.min(window.innerHeight - 100, Math.max(10, e.clientY - 40))}px`;
-                if (!pair.summary) {
-                    tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br><span style="color:#888">分析中...</span>`;
-                    pair.summary = await fetchSummary(pair.text);
+
+                if (pair.summary) {
+                    tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br>${pair.summary}`;
+                } else if (pair.isLoading) {
+                    tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br><span style="color:#888">AI 正在分析中...</span>`;
+                } else {
+                    tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br><span style="color:#888">等待分析...</span>`;
                 }
-                tooltip.innerHTML = `<b style="color:#4285f4">提问摘要:</b><br>${pair.summary}`;
             };
-            uItem.onmouseleave = () => { tooltip.style.display = 'none'; tooltip.innerHTML = ''; };
+            uItem.onmouseleave = () => {
+                tooltip.style.display = 'none';
+                tooltip.innerHTML = '';
+                tooltip.removeAttribute('data-active-id');
+            };
             row.appendChild(uItem);
 
-            // 答案块
+            // 答案块 (true: 跳回答)
             if (pair.hasModel) {
                 const mItem = document.createElement('div');
                 mItem.className = `nav-item model ${!isVisible ? 'not-in-dom' : ''}`;
-                mItem.onclick = () => smartJump(pair.id);
+                mItem.onclick = () => smartJump(pair.id, true);
                 mItem.onmouseenter = (e) => {
                     tooltip.style.display = 'block';
                     tooltip.style.top = `${Math.min(window.innerHeight - 100, Math.max(10, e.clientY - 40))}px`;
-                    tooltip.innerHTML = `<b style="color:#9aa0a6">Gemini 回答</b><br>点击跳转至顶部`;
+                    tooltip.innerHTML = `<b style="color:#9aa0a6">Gemini 回答</b><br>点击跳转至回答顶部`;
                 };
                 mItem.onmouseleave = () => { tooltip.style.display = 'none'; tooltip.innerHTML = ''; };
                 row.appendChild(mItem);
