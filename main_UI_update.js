@@ -222,6 +222,7 @@
                 <div class="help-item"><span class="help-icon">📌</span><div class="help-text"><b>固定侧栏：</b>点击顶部图钉图标，可固定侧边栏常驻显示。</div></div>
                 <div class="help-item"><span class="help-icon">↔️</span><div class="help-text"><b>自动开合：</b>取消固定时，悬停按钮 0.5 秒或点击展开；鼠标移向页面左侧自动收起。</div></div>
                 <div class="help-item"><span class="help-icon">⬇️</span><div class="help-text"><b>底部按钮：</b>一键直达对话最底部，查看最新回复。</div></div>
+                <div class="help-item"><span class="help-icon">⚠⚠</span><div class="help-text"><b>注意：</b>由于 Gemini 采用懒加载策略，长对话需手动向上滚动加载历史内容，以触发目录同步。</div></div>
             </div>
             <div style="margin-top:15px; text-align:right; font-size:12px; color:#888;">v4.3.0</div>
         </div>
